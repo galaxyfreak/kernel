@@ -341,6 +341,30 @@ int cci_hwid_info_read( char *page, char **start, off_t off, int count, int *eof
    return len;
 }
 
+static const struct file_operations cci_hw_sim_type_fops = {
+  .read = cci_hw_sim_type_read,
+};
+
+static const struct file_operations cci_hw_board_type_fops = {
+  .read = cci_hw_board_type_read,
+};
+
+static const struct file_operations cci_hw_band_type_fops = {
+  .read = cci_hw_band_type_read,
+};
+
+static const struct file_operations cci_hw_proj_name_fops = {
+  .read = cci_hw_proj_name_read,
+};
+
+static const struct file_operations cci_hw_customer_type_fops = {
+  .read = cci_hw_customer_type_read,
+};
+
+static const struct file_operations cci_hwid_info_fops = {
+  .read = cci_hwid_info_read,
+};
+
 static int __init cci_hw_id_init(void)
 {
 	int err = 0;
@@ -350,12 +374,12 @@ static int __init cci_hw_id_init(void)
 	cci_hw_det_gpio();
 #endif
 
-	create_proc_read_entry("cci_hw_sim_type", 0, NULL, cci_hw_sim_type_read, NULL);
-	create_proc_read_entry("cci_hw_board_type", 0, NULL, cci_hw_board_type_read, NULL);
-	create_proc_read_entry("cci_hw_band_type", 0, NULL, cci_hw_band_type_read, NULL);
-	create_proc_read_entry("cci_hw_proj_type", 0, NULL, cci_hw_proj_name_read, NULL);
-	create_proc_read_entry("cci_hw_customer_type", 0, NULL, cci_hw_customer_type_read, NULL);
-	create_proc_read_entry("cci_hwid_info", 0, NULL, cci_hwid_info_read, NULL);
+	proc_create("cci_hw_sim_type",0,NULL,&cci_hw_sim_type_fops);
+	proc_create("cci_hw_board_type",0,NULL,&cci_hw_board_type_fops);
+	proc_create("cci_hw_band_type",0,NULL,&cci_hw_band_type_fops);
+	proc_create("cci_hw_proj_type",0,NULL,&cci_hw_proj_name_fops);
+	proc_create("cci_hw_customer_type",0,NULL,&cci_hw_customer_type_fops);
+	proc_create("cci_hwid_info",0,NULL,&cci_hwid_info_fops);
 
 #ifdef HWID_USE_SHARED_MEMORY
 	cci_hwid_write_to_smem();
