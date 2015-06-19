@@ -112,3 +112,5 @@ obj-$(CONFIG_PERFMAP) += perfmap.o
 obj-$(CONFIG_HAS_MACH_MEMUTILS) += memutils/
 
 obj-$(CONFIG_WIFI_CONTROL_FUNC) +=board-sony_shinano-wifi.o
+
+obj-$(CONFIG_CCI_HARDWARE_ID) += cci_hw_id.o
