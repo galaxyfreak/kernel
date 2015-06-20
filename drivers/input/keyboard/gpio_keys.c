@@ -816,18 +816,17 @@ static int gpio_keys_probe(struct platform_device *pdev)
 
 	device_init_wakeup(&pdev->dev, wakeup);
 
-	if (gpio_is_valid (106)) {
-		pr_err("GALAXYFREAK: GPIO 106 IS VALID\n");
-	} else {
+	if (gpio_request(106, "eagle voldown gpio")) {
 		pr_err("GALAXYFREAK: GPIO 106 IS -NOT- VALID\n");
+	} else {
+		pr_err("GALAXYFREAK: GPIO 106 IS VALID\n");
 		}
 
-	if (gpio_is_valid (109)) {
-		pr_err("GALAXYFREAK: GPIO 109 IS VALID\n");
-	} else {
+	if (gpio_request(109, "eagle voldown gpio")) {
 		pr_err("GALAXYFREAK: GPIO 109 IS -NOT- VALID\n");
-		}		
-		
+	} else {
+		pr_err("GALAXYFREAK: GPIO 109 IS VALID\n");
+		}
 	return 0;
 
  fail3:
