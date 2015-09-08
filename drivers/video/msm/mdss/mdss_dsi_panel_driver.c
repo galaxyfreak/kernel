@@ -1676,6 +1676,15 @@ static inline int mdss_dsi_panel_power_off_ex(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+
+	/*
+	 * Continuous splash and video mode required the first
+	 * pinctrl setup not to be done: set disp_on_in_boot to
+	 * false in order to resume normal mdss pinctrl operation.
+	 * Now we can safely shut mdss/display down and back up.
+	 */
+	spec_pdata->disp_on_in_boot = false;
+
 	/* If we have to detect the panel NOW, don't power it off */
 	if (skip_first_off && spec_pdata->panel_detect) {
 		skip_first_off = 0;
@@ -4052,6 +4061,8 @@ int mdss_dsi_panel_init(struct device_node *node,
 		return -EINVAL;
 	}
 
+	spec_pdata->disp_on_in_boot = display_on_in_boot;
+
 	dsi_ctrl_np = of_parse_phandle(node,
 		"qcom,mdss-dsi-panel-controller", 0);
 	if (!dsi_ctrl_np) {
@@ -4090,7 +4101,7 @@ int mdss_dsi_panel_init(struct device_node *node,
 				__func__, vsn_gpio);
 	}
 
-	if ((!display_on_in_boot) || (!index))
+	if ((!spec_pdata->disp_on_in_boot) || (!index))
 		mdss_dsi_pinctrl_set_state(ctrl_pdata, true);
 
 	/* Panel detection setup */
@@ -4138,7 +4149,7 @@ exit_lcd_id:
 		pr_info("%s: physical:%d\n", __func__, spec_pdata->adc_uv);
 	}
 
-	if (!display_on_in_boot)
+	if (!spec_pdata->disp_on_in_boot)
 		mdss_dsi_pinctrl_set_state(ctrl_pdata, false);
 
 	alt_panelid_cmd = of_property_read_bool(node,
@@ -4153,7 +4164,7 @@ exit_lcd_id:
 		goto error;
 	}
 
-	cont_splash_enabled = display_on_in_boot;
+	cont_splash_enabled = spec_pdata->disp_on_in_boot;
 
 	if (!cont_splash_enabled) {
 		pr_info("%s:%d Continuous splash flag not found.\n",
