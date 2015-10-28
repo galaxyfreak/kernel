@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -27,9 +27,6 @@
 #define TRUE  1
 #define FALSE 0
 
-#define CCI_PINCTRL_STATE_DEFAULT "cci_default"
-#define CCI_PINCTRL_STATE_SLEEP "cci_suspend"
-
 #define CCI_NUM_CLK_MAX	16
 
 enum cci_i2c_queue_t {
@@ -40,7 +37,6 @@ enum cci_i2c_queue_t {
 struct msm_camera_cci_client {
 	struct v4l2_subdev *cci_subdev;
 	uint32_t freq;
-	enum i2c_freq_mode_t i2c_freq_mode;
 	enum cci_i2c_master_t cci_i2c_master;
 	uint16_t sid;
 	uint16_t cid;
@@ -134,20 +130,14 @@ struct cci_device {
 	uint32_t hw_version;
 	uint8_t ref_count;
 	enum msm_cci_state_t cci_state;
-	uint32_t num_clk;
 
 	struct clk *cci_clk[CCI_NUM_CLK_MAX];
 	struct msm_camera_cci_i2c_queue_info
 		cci_i2c_queue_info[NUM_MASTERS][NUM_QUEUES];
 	struct msm_camera_cci_master_info cci_master_info[NUM_MASTERS];
-	struct msm_cci_clk_params_t cci_clk_params[I2C_MAX_MODES];
+	struct msm_cci_clk_params_t cci_clk_params[MASTER_MAX];
 	struct gpio *cci_gpio_tbl;
 	uint8_t cci_gpio_tbl_size;
-	uint8_t master_clk_init[MASTER_MAX];
-	struct msm_pinctrl_info cci_pinctrl;
-	uint8_t cci_pinctrl_status;
-	struct regulator *reg_ptr;
-	uint32_t cycles_per_us;
 };
 
 enum msm_cci_i2c_cmd_type {
@@ -183,14 +173,7 @@ enum msm_cci_gpio_cmd_type {
 	CCI_GPIO_INVALID_CMD,
 };
 
-#ifdef CONFIG_MSM_CCI
 struct v4l2_subdev *msm_cci_get_subdev(void);
-#else
-static inline struct v4l2_subdev *msm_cci_get_subdev(void)
-{
-	return NULL;
-}
-#endif
 
 #define VIDIOC_MSM_CCI_CFG \
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 23, struct msm_camera_cci_ctrl *)
