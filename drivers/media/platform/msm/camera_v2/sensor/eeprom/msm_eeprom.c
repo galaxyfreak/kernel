@@ -1031,9 +1031,11 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 		pr_err("%s read_eeprom_memory failed\n", __func__);
 		goto power_down;
 	}
+/*
 	for (j = 0; j < e_ctrl->cal_data.num_data; j++)
 		CDBG("memory_data[%d] = 0x%X\n", j,
 		     e_ctrl->cal_data.mapdata[j]);
+*/
 
 	e_ctrl->is_supported |= msm_eeprom_match_crc(&e_ctrl->cal_data);
 
