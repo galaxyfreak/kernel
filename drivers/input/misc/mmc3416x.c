@@ -42,6 +42,8 @@
 
 #include "mmc3416x.h"
 
+#define READMD	0
+
 #define MMC3416X_DELAY_TM_MS	10
 
 #define MMC3416X_DELAY_SET_MS	75
@@ -51,13 +53,32 @@
 #define MMC3416X_DEFAULT_INTERVAL_MS	100
 #define MMC3416X_TIMEOUT_SET_MS	15000
 
+#define MMC3416X_SET_INTV	250
+
 #define MMC3416X_PRODUCT_ID	0x06
+
+#define MMC3416X_DEV_NAME	"mmc3416x"
 
 /* POWER SUPPLY VOLTAGE RANGE */
 #define MMC3416X_VDD_MIN_UV	2000000
 #define MMC3416X_VDD_MAX_UV	3300000
 #define MMC3416X_VIO_MIN_UV	1750000
 #define MMC3416X_VIO_MAX_UV	1950000
+
+static u32 read_idx = 0;
+struct class *mag_class;
+
+static struct i2c_client *this_client;
+
+static struct input_polled_dev *ipdev;
+
+static struct input_dev *ecs_data_device;
+
+static short ecompass_delay = 0;
+static atomic_t	a_flag;
+static atomic_t	m_flag;
+static atomic_t	o_flag;
+static atomic_t	grv_flag;
 
 enum {
 	OBVERSE_X_AXIS_FORWARD = 0,
@@ -249,6 +270,308 @@ exit:
 	mutex_unlock(&memsic->ecompass_lock);
 	return rc;
 }
+
+static int mmc3xxx_i2c_rx_data(char *buf, int len)
+{
+	uint8_t i;
+	struct i2c_msg msgs[] = {
+		{
+			.addr	= this_client->addr,
+			.flags	= 0,
+			.len	= 1,
+			.buf	= buf,
+		},
+		{
+			.addr	= this_client->addr,
+			.flags	= I2C_M_RD,
+			.len	= len,
+			.buf	= buf,
+		}
+	};
+
+	for (i = 0; i < MMC3416X_RETRY_COUNT; i++) {
+		if (i2c_transfer(this_client->adapter, msgs, 2) >= 0) {
+			break;
+		}
+		mdelay(10);
+	}
+
+	if (i >= MMC3416X_RETRY_COUNT) {
+		pr_err("%s: retry over %d\n", __FUNCTION__, MMC3416X_RETRY_COUNT);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int mmc3xxx_i2c_tx_data(char *buf, int len)
+{
+	uint8_t i;
+	struct i2c_msg msg[] = {
+		{
+			.addr	= this_client->addr,
+			.flags	= 0,
+			.len	= len,
+			.buf	= buf,
+		}
+	};
+	
+	for (i = 0; i < MMC3416X_RETRY_COUNT; i++) {
+		if (i2c_transfer(this_client->adapter, msg, 1) >= 0) {
+			break;
+		}
+		mdelay(10);
+	}
+
+	if (i >= MMC3416X_RETRY_COUNT) {
+		pr_err("%s: retry over %d\n", __FUNCTION__, MMC3416X_RETRY_COUNT);
+		return -EIO;
+	}
+	return 0;
+}
+
+static int mmc3416x_open(struct inode *inode, struct file *file)
+{
+	return nonseekable_open(inode, file);
+}
+
+static int mmc3416x_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static long mmc3416x_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	void __user *pa = (void __user *)arg;
+	int __user *pa_i = (void __user *)arg;
+	unsigned char data[16] = {0};
+	int vec[3] = {0};
+	int reg;
+	short flag;
+	struct mmc3416x_data *memsic;
+
+	mutex_lock(&memsic->ecompass_lock);
+
+	switch (cmd) {
+	case MMC3416X_IOC_DIAG:
+		if (get_user(reg, pa_i))
+			return -EFAULT;
+		data[0] = (unsigned char)((0xff)&reg);
+		if (mmc3xxx_i2c_rx_data(data, 1) < 0) {
+			return -EFAULT;
+		}
+		if (put_user(data[0], pa_i))
+			return -EFAULT;
+		break;
+	case MMC3416X_IOC_TM:
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_TM;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		/* wait TM done for coming data read */
+		msleep(MMC3416X_DELAY_TM_MS);
+		break;
+	case MMC3416X_IOC_SET:
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_REFILL;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(MMC3416X_DELAY_SET_MS);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_SET;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(1);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = 0;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(MMC3416X_DELAY_SET_MS);
+		break;
+	case MMC3416X_IOC_RESET:
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_REFILL;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(MMC3416X_DELAY_RESET_MS);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_RESET;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(1);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = 0;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(1);
+		break;
+	case MMC3416X_IOC_READ:
+		data[0] = MMC3416X_REG_DATA;
+		if (mmc3xxx_i2c_rx_data(data, 6) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		vec[0] = data[1] << 8 | data[0];
+		vec[1] = data[3] << 8 | data[2];
+		vec[2] = data[5] << 8 | data[4];
+		vec[2] = 65536 - vec[2];	
+	/*#if DEBUG
+		printk("[X - %04x] [Y - %04x] [Z - %04x]\n", 
+			vec[0], vec[1], vec[2]);
+	#endif*/
+		if (copy_to_user(pa, vec, sizeof(vec))) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		break;
+	case MMC3416X_IOC_READXYZ:
+		if (!(read_idx % MMC3416X_SET_INTV)) {
+		    data[0] = MMC3416X_REG_CTRL;
+		    data[1] = MMC3416X_CTRL_REFILL;
+		    mmc3xxx_i2c_tx_data(data, 2);
+		    msleep(MMC3416X_DELAY_RESET_MS);
+		    data[0] = MMC3416X_REG_CTRL;
+		    data[1] = MMC3416X_CTRL_RESET;
+		    mmc3xxx_i2c_tx_data(data, 2);
+		    msleep(1);
+		    data[0] = MMC3416X_REG_CTRL;
+		    data[1] = 0;
+		    mmc3xxx_i2c_tx_data(data, 2);
+		    msleep(1);
+
+	        data[0] = MMC3416X_REG_CTRL;
+	        data[1] = MMC3416X_CTRL_REFILL;
+	        mmc3xxx_i2c_tx_data(data, 2);
+	        msleep(MMC3416X_DELAY_SET_MS);
+	        data[0] = MMC3416X_REG_CTRL;
+	        data[1] = MMC3416X_CTRL_SET;
+	        mmc3xxx_i2c_tx_data(data, 2);
+	        msleep(1);
+	        data[0] = MMC3416X_REG_CTRL;
+	        data[1] = 0;
+	        mmc3xxx_i2c_tx_data(data, 2);
+	        msleep(1);
+		}
+		/* send TM cmd before read */
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_TM;
+		/* not check return value here, assume it always OK */
+		mmc3xxx_i2c_tx_data(data, 2);
+		/* wait TM done for coming data read */
+		msleep(MMC3416X_DELAY_TM_MS);
+#if READMD
+		/* Read MD */
+		data[0] = MMC3416X_REG_DS;
+		if (mmc3xxx_i2c_rx_data(data, 1) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		while (!(data[0] & 0x01)) {
+			msleep(1);
+			/* Read MD again*/
+			data[0] = MMC3416X_REG_DS;
+			if (mmc3xxx_i2c_rx_data(data, 1) < 0) {
+	                        mutex_unlock(&memsic->ecompass_lock);
+				return -EFAULT;
+                        }
+			
+			if (data[0] & 0x01) break;
+			MD_times++;
+			if (MD_times > 2) {
+	                        mutex_unlock(&memsic->ecompass_lock);
+		#if DEBUG
+				printk("TM not work!!");
+		#endif
+				return -EFAULT;
+			}
+		}
+#endif		
+		/* read xyz raw data */
+		read_idx++;
+		data[0] = MMC3416X_REG_DATA;
+		if (mmc3xxx_i2c_rx_data(data, 6) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		vec[0] = data[1] << 8 | data[0];
+		vec[1] = data[3] << 8 | data[2];
+		vec[2] = data[5] << 8 | data[4];
+		vec[2] = 65536 - vec[2];	
+	/*#if DEBUG
+		printk("[X - %04x] [Y - %04x] [Z - %04x]\n", 
+			vec[0], vec[1], vec[2]);
+	#endif*/
+		if (copy_to_user(pa, vec, sizeof(vec))) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+
+		break;
+	case MMC3416X_IOC_ID:
+		data[0] = MMC3416X_REG_PRODUCTID_0;
+		if (mmc3xxx_i2c_rx_data(data, 1) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+                data[14] = data[0];
+		data[0] = MMC3416X_REG_PRODUCTID_1;
+		if (mmc3xxx_i2c_rx_data(data, 1) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+                data[15] = data[0];
+                flag = data[15] << 8 | data[14];
+		if (copy_to_user(pa, &flag, sizeof(flag))) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+                }
+                break;
+	default:
+		break;
+	}
+	mutex_unlock(&memsic->ecompass_lock);
+
+	return 0;
+}
+
+static ssize_t mmc3416x_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	ssize_t ret = 0;
+
+	sprintf(buf, "MMC3416X");
+	ret = strlen(buf) + 1;
+
+	return ret;
+}
+
+static DEVICE_ATTR(mmc3416x, S_IRUGO, mmc3416x_show, NULL);
+
+static struct file_operations mmc3416x_fops = {
+	.owner		= THIS_MODULE,
+	.open		= mmc3416x_open,
+	.release	= mmc3416x_release,
+	.unlocked_ioctl = mmc3416x_ioctl,
+};
+
+static struct miscdevice mmc3416x_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = MMC3416X_DEV_NAME,
+	.fops = &mmc3416x_fops,
+};
 
 static void mmc3416x_poll(struct work_struct *work)
 {
@@ -475,12 +798,16 @@ err_vdd_disable:
 	mutex_unlock(&memsic->ecompass_lock);
 	return rc;
 }
+
+uint8_t g_compass_product_id=0;
+
 static int mmc3416x_check_device(struct mmc3416x_data *memsic)
 {
 	unsigned int data;
 	int rc;
 
 	rc = regmap_read(memsic->regmap, MMC3416X_REG_PRODUCTID_1, &data);
+
 	if (rc) {
 		dev_err(&memsic->i2c->dev, "read reg %d failed.(%d)\n",
 				MMC3416X_REG_DS, rc);
@@ -491,6 +818,7 @@ static int mmc3416x_check_device(struct mmc3416x_data *memsic)
 	if (data != MMC3416X_PRODUCT_ID)
 		return -ENODEV;
 
+	g_compass_product_id = MMC3416X_PRODUCT_ID;
 	return 0;
 }
 
@@ -596,6 +924,280 @@ static int mmc3416x_set_poll_delay(struct sensors_classdev *sensors_cdev,
 	return 0;
 }
 
+static ssize_t mmc3416x_fs_read(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	unsigned char data[6] = {0};
+	int vec[3] = {0};
+	int count;
+	int res = 0;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+
+	mutex_lock(&memsic->ecompass_lock);
+
+        data[0] = MMC3416X_REG_CTRL;
+        data[1] = MMC3416X_CTRL_TM;
+        res = mmc3xxx_i2c_tx_data(data, 2);
+
+        msleep(MMC3416X_DELAY_TM_MS);
+
+        data[0] = MMC3416X_REG_DATA;
+	if (mmc3xxx_i2c_rx_data(data, 6) < 0) {
+	    return 0;
+	}
+	vec[0] = data[1] << 8 | data[0];
+	vec[1] = data[3] << 8 | data[2];
+	vec[2] = data[5] << 8 | data[4];
+	vec[2] = 65536 - vec[2];	
+	count = sprintf(buf,"%d,%d,%d\n", vec[0], vec[1], vec[2]);
+	mutex_unlock(&memsic->ecompass_lock);
+
+	return count;
+}
+
+static ssize_t mmc3416x_fs_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	unsigned char data[16] = {0};
+
+	data[0] = MMC3416X_REG_CTRL;
+	data[1] = MMC3416X_CTRL_TM;
+	if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	}
+	msleep(MMC3416X_DELAY_TM_MS);
+
+	return size;
+}
+
+static ssize_t mmc3416x_set(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+
+	unsigned char data[16] = {0};
+	mutex_lock(&memsic->ecompass_lock);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_REFILL;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(MMC3416X_DELAY_SET_MS);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_SET;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(1);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = 0;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(MMC3416X_DELAY_SET_MS);
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
+static ssize_t mmc3416x_reset(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+
+	unsigned char data[16] = {0};
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+
+	mutex_lock(&memsic->ecompass_lock);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_REFILL;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(MMC3416X_DELAY_RESET_MS);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = MMC3416X_CTRL_RESET;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(1);
+		data[0] = MMC3416X_REG_CTRL;
+		data[1] = 0;
+		if (mmc3xxx_i2c_tx_data(data, 2) < 0) {
+	                mutex_unlock(&memsic->ecompass_lock);
+			return -EFAULT;
+		}
+		msleep(1);
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
+static ssize_t mmc3416x_set_delay(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	int delay;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+
+	mutex_lock(&memsic->ecompass_lock);
+	if(1==sscanf(buf, "%d", &delay))
+	{
+		ecompass_delay = delay;
+	}
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
+static ssize_t mmc3416x_get_delay(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int count;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+
+	mutex_lock(&memsic->ecompass_lock);
+	count = sprintf(buf,"%d\n", ecompass_delay);
+	mutex_unlock(&memsic->ecompass_lock);
+	return count;
+}
+
+static ssize_t mmc3416x_set_aflag(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	int flag;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);;
+
+	mutex_lock(&memsic->ecompass_lock);
+	if(1==sscanf(buf, "%d", &flag))
+	{
+		atomic_set(&a_flag, flag);
+	}
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
+static ssize_t mmc3416x_get_aflag(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int count;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+
+	mutex_lock(&memsic->ecompass_lock);
+	count = sprintf(buf,"%d\n", *(int *)&a_flag);
+	mutex_unlock(&memsic->ecompass_lock);
+	return count;
+}
+
+static ssize_t mmc3416x_set_mflag(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	int flag;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+
+	mutex_lock(&memsic->ecompass_lock);
+	if(1==sscanf(buf, "%d", &flag))
+	{
+		atomic_set(&m_flag, flag);
+        atomic_set(&grv_flag, flag);
+	}
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
+static ssize_t mmc3416x_get_mflag(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int count;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+	mutex_lock(&memsic->ecompass_lock);
+	count = sprintf(buf,"%d\n", *(int *)&m_flag);
+	mutex_unlock(&memsic->ecompass_lock);
+	return count;
+}
+
+static ssize_t mmc3416x_set_oflag(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	int flag;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+	mutex_lock(&memsic->ecompass_lock);
+	if(1==sscanf(buf, "%d", &flag))
+	{
+		atomic_set(&o_flag, flag);
+        atomic_set(&grv_flag, flag);
+	}
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
+static ssize_t mmc3416x_get_oflag(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int count;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+	mutex_lock(&memsic->ecompass_lock);
+	count = sprintf(buf,"%d\n", *(int *)&o_flag);
+	mutex_unlock(&memsic->ecompass_lock);
+	return count;
+}
+
+static ssize_t mmc3416x_set_grvflag(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	int flag;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+	mutex_lock(&memsic->ecompass_lock);
+	if(1==sscanf(buf, "%d", &flag))
+	{
+		atomic_set(&grv_flag, flag);
+	}
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
+static ssize_t mmc3416x_get_grvflag(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int count;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+	mutex_lock(&memsic->ecompass_lock);
+	count = sprintf(buf,"%d\n", *(int *)&grv_flag);
+	mutex_unlock(&memsic->ecompass_lock);	
+	return count;
+}
+
+static ssize_t mmc3416x_set_ypr(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	int ypr[17];
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
+	mutex_lock(&memsic->ecompass_lock);
+	sscanf(buf, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d", &ypr[0], &ypr[1], &ypr[2], &ypr[3], &ypr[4], &ypr[5], &ypr[6], &ypr[7], &ypr[8], &ypr[9], &ypr[10], &ypr[11], &ypr[12], &ypr[13], &ypr[14], &ypr[15], &ypr[16]);
+	printk("%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", ypr[0], ypr[1], ypr[2], ypr[3], ypr[4], ypr[5], ypr[6], ypr[7], ypr[8], ypr[9], ypr[10], ypr[11], ypr[12], ypr[13], ypr[14], ypr[15], ypr[16]);
+	
+		/* Report acceleration sensor information */
+		if (atomic_read(&a_flag)) {
+			input_report_abs(ecs_data_device, ABS_X, ypr[0]);
+			input_report_abs(ecs_data_device, ABS_Y, ypr[1]);
+			input_report_abs(ecs_data_device, ABS_Z, ypr[2]);
+			input_report_abs(ecs_data_device, ABS_WHEEL, ypr[3]);
+		}
+
+		/* Report magnetic sensor information */
+		if (atomic_read(&m_flag)) {
+			printk("mag data = %d, %d, %d, %d\n", ypr[4], ypr[5], ypr[6], ypr[7]);
+			input_report_abs(ecs_data_device, ABS_HAT0X, ypr[4]);
+			input_report_abs(ecs_data_device, ABS_HAT0Y, ypr[5]);
+			input_report_abs(ecs_data_device, ABS_BRAKE, ypr[6]);
+			input_report_abs(ecs_data_device, ABS_GAS, ypr[7]);
+		}
+
+		/* Report orientation information */
+		if (atomic_read(&o_flag)) {
+			input_report_abs(ecs_data_device, ABS_RX, ypr[8]);
+			input_report_abs(ecs_data_device, ABS_RY, ypr[9]);
+			input_report_abs(ecs_data_device, ABS_RZ, ypr[10]);
+			input_report_abs(ecs_data_device, ABS_RUDDER, ypr[11]);
+		}
+
+		/* Report geomagnetic rotation vector information */
+		if (atomic_read(&grv_flag)) {
+			input_report_abs(ecs_data_device, ABS_HAT1X, ypr[12]);
+			input_report_abs(ecs_data_device, ABS_HAT1Y, ypr[13]);
+			input_report_abs(ecs_data_device, ABS_HAT2X, ypr[14]);
+			input_report_abs(ecs_data_device, ABS_HAT2Y, ypr[15]);
+      			input_report_abs(ecs_data_device, ABS_HAT3X, ypr[16]);
+		input_sync(ecs_data_device);
+	}
+	mutex_unlock(&memsic->ecompass_lock);
+	return size;
+}
+
 static struct regmap_config mmc3416x_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
@@ -612,6 +1214,19 @@ static int mmc3416x_probe(struct i2c_client *client, const struct i2c_device_id 
 		pr_err("mmc3416x i2c functionality check failed.\n");
 		res = -ENODEV;
 		goto out;
+	}
+
+	this_client = client;
+
+	res = misc_register(&mmc3416x_device);
+	if (res) {
+		pr_err("%s: mmc3416x_device register failed\n", __FUNCTION__);
+		goto out;
+	}
+	res = device_create_file(&client->dev, &dev_attr_mmc3416x);
+	if (res) {
+		pr_err("%s: device_create_file failed\n", __FUNCTION__);
+		misc_deregister(&mmc3416x_device);
 	}
 
 	memsic = devm_kzalloc(&client->dev, sizeof(struct mmc3416x_data),
@@ -723,6 +1338,9 @@ static int mmc3416x_remove(struct i2c_client *client)
 		destroy_workqueue(memsic->data_wq);
 	mmc3416x_power_deinit(memsic);
 
+	device_remove_file(&client->dev, &dev_attr_mmc3416x);
+	misc_deregister(&mmc3416x_device);
+
 	if (memsic->idev)
 		input_unregister_device(memsic->idev);
 
@@ -776,6 +1394,16 @@ exit:
 	return res;
 }
 
+static DEVICE_ATTR(read_mag, S_IRUGO | S_IWUSR | S_IWGRP, mmc3416x_fs_read, mmc3416x_fs_write);
+static DEVICE_ATTR(set, S_IRUGO | S_IWUGO, NULL, mmc3416x_set);
+static DEVICE_ATTR(reset, S_IRUGO | S_IWUGO, NULL, mmc3416x_reset);
+static DEVICE_ATTR(delay, S_IRUGO | S_IWUGO, mmc3416x_get_delay, mmc3416x_set_delay);
+static DEVICE_ATTR(aflag, S_IRUGO | S_IWUGO, mmc3416x_get_aflag, mmc3416x_set_aflag);
+static DEVICE_ATTR(mflag, S_IRUGO | S_IWUGO, mmc3416x_get_mflag, mmc3416x_set_mflag);
+static DEVICE_ATTR(oflag, S_IRUGO | S_IWUGO, mmc3416x_get_oflag, mmc3416x_set_oflag);
+static DEVICE_ATTR(grvflag, S_IRUGO | S_IWUGO, mmc3416x_get_grvflag, mmc3416x_set_grvflag);
+static DEVICE_ATTR(setypr, S_IRUGO | S_IWUGO, NULL, mmc3416x_set_ypr);
+
 static const struct i2c_device_id mmc3416x_id[] = {
 	{ MMC3416X_I2C_NAME, 0 },
 	{ }
@@ -803,7 +1431,52 @@ static struct i2c_driver mmc3416x_driver = {
 	},
 };
 
-module_i2c_driver(mmc3416x_driver);
+static int __init mmc3416x_init(void)
+{
+	struct device *dev_t;
+
+	mag_class = class_create(THIS_MODULE, "magnetic");
+
+	if (IS_ERR(mag_class)) 
+		return PTR_ERR( mag_class );
+
+	dev_t = device_create( mag_class, NULL, 0, "%s", "magnetic");
+
+	if (device_create_file(dev_t, &dev_attr_read_mag) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_read_mag.attr.name);
+	if (device_create_file(dev_t, &dev_attr_set) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_set.attr.name);
+	if (device_create_file(dev_t, &dev_attr_reset) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_reset.attr.name);
+	if (device_create_file(dev_t, &dev_attr_delay) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_delay.attr.name);
+	if (device_create_file(dev_t, &dev_attr_aflag) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_aflag.attr.name);
+	if (device_create_file(dev_t, &dev_attr_mflag) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_mflag.attr.name);
+	if (device_create_file(dev_t, &dev_attr_oflag) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_oflag.attr.name);
+	if (device_create_file(dev_t, &dev_attr_grvflag) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_grvflag.attr.name);
+	if (device_create_file(dev_t, &dev_attr_setypr) < 0)
+		printk("Failed to create device file(%s)!\n", dev_attr_setypr.attr.name);
+	//E [CCI]Ginger modified for factory test
+	if (IS_ERR(dev_t)) 
+	{
+		return PTR_ERR(dev_t);
+	}
+        printk("mmc3416x add driver\r\n");
+	ipdev = NULL;
+	return i2c_add_driver(&mmc3416x_driver);
+}
+
+static void __exit mmc3416x_exit(void)
+{
+        i2c_del_driver(&mmc3416x_driver);
+}
+
+module_init(mmc3416x_init);
+module_exit(mmc3416x_exit);
 
 MODULE_DESCRIPTION("MEMSIC MMC3416X Magnetic Sensor Driver");
 MODULE_LICENSE("GPL");
