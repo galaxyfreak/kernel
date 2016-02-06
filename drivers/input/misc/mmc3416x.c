@@ -74,6 +74,8 @@ static struct input_polled_dev *ipdev;
 
 static struct input_dev *ecs_data_device;
 
+struct device *dev;
+
 static short ecompass_delay = 0;
 static atomic_t	a_flag;
 static atomic_t	m_flag;
@@ -348,7 +350,7 @@ static long mmc3416x_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 	int vec[3] = {0};
 	int reg;
 	short flag;
-	struct mmc3416x_data *memsic;
+	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
 
 	mutex_lock(&memsic->ecompass_lock);
 
