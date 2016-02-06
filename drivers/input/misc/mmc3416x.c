@@ -1469,6 +1469,7 @@ static int __init mmc3416x_init(void)
 	}
         printk("mmc3416x add driver\r\n");
 	ipdev = NULL;
+	dev = dev_t;
 	return i2c_add_driver(&mmc3416x_driver);
 }
 
