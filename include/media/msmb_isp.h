@@ -569,6 +569,7 @@ struct msm_isp_event_data {
 	struct timeval timestamp;
 	/* Monotonic timestamp since bootup */
 	struct timeval mono_timestamp;
+	enum msm_vfe_input_src input_intf;
 	uint32_t frame_id;
 	union {
 		struct msm_isp_stats_event stats;
