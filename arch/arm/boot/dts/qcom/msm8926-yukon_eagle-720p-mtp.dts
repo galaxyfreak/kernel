@@ -16,7 +16,6 @@
 #include "msm8926-v1.dtsi"
 #include "msm8926-yukon_common.dtsi"
 #include "msm8926-yukon_eagle.dtsi"
-#include "msm8926-yukon_eagle_camera.dtsi"
 #include "dsi-panel-eagle.dtsi"
 
 / {
