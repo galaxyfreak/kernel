@@ -186,14 +186,8 @@ kernelconfig: $(KERNEL_OUT) $(KERNEL_CONFIG)
 	cp $(KERNEL_OUT)/defconfig $(KERNEL_SRC)/arch/$(KERNEL_ARCH)/configs/$(KERNEL_DEFCONFIG)
 
 ## Install it
-INSTALLED_KERNEL_TARGET ?= $(PRODUCT_OUT)/kernel
-
-file := $(INSTALLED_KERNEL_TARGET)
-ALL_PREBUILT += $(file)
-$(file) : $(KERNEL_BIN) | $(ACP)
-	$(transform-prebuilt-to-target)
-
-ALL_PREBUILT += $(INSTALLED_KERNEL_TARGET)
-
-endif # Sony AOSP devices
-endif # BUILD_KERNEL
+PHONY: $(PRODUCT_OUT)/kernel
+ $(PRODUCT_OUT)/kernel: $(KERNEL_BIN)
+ 	cp $(KERNEL_BIN) $(PRODUCT_OUT)/kernel
+endif
+endif
